@@ -1,12 +1,18 @@
-# file-intake 路由表
+# file-intake 路由表（人读版）
 
-按扩展名路由。**优先复用已有 skill/工具，不重复造轮子**。
+> ⚠️ **机器以 `scripts/route.mjs` 为准**（它先嗅探魔数、再查扩展名，并直接给出可执行命令）。
+> 本文件只保留各类型的补充说明；两边不一致时以 `route.mjs` 为准。
+> 依赖缺失请先跑 `node scripts/doctor.mjs`。
+
+**优先复用已有 skill/工具，不重复造轮子**。
 
 ## 图片（→ dsh-vision-skill）
 
 | 扩展名 | 处理 |
 |---|---|
-| jpg jpeg png webp gif bmp heic heif | 多模态模型直接 `read_image`；纯文本模型 `node "..\dsh-vision-skill\scripts\vision.js" "<路径>" [--schema img2img\|ecom\|ground]` |
+| jpg jpeg png webp gif | 多模态模型直接 `read_image`（原生支持）；纯文本模型 `node "..\dsh-vision-skill\scripts\vision.js" "<路径>" [--schema img2img\|ecom\|ground]` |
+| bmp tiff avif | 原生 `read_image` 不支持 → 走 `vision.js` |
+| heic heif | **本机 ffmpeg 无 HEIF 解码器** → 先 `py -m pip install pillow-heif`，再用 `extract.py` 转 PNG 后识别（不要直接喂给视觉 API） |
 | 生图需求 | 转 img2img-studio（图生图工作流） |
 
 ## 视频（→ video-deconstruct，默认拆解）
