@@ -6,7 +6,7 @@
 
 | 扩展名 | 处理 |
 |---|---|
-| jpg jpeg png webp gif bmp heic heif | `node "..\dsh-vision-skill\scripts\vision.js" "<路径>" [--schema img2img\|ecom\|ground]` |
+| jpg jpeg png webp gif bmp heic heif | 多模态模型直接 `read_image`；纯文本模型 `node "..\dsh-vision-skill\scripts\vision.js" "<路径>" [--schema img2img\|ecom\|ground]` |
 | 生图需求 | 转 img2img-studio（图生图工作流） |
 
 ## 视频（→ video-deconstruct，默认拆解）
