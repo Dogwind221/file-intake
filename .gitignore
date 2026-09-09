@@ -6,3 +6,5 @@ cookies.json
 *_token*
 secrets*
 
+__pycache__/
+*.pyc
