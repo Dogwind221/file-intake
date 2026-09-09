@@ -1,19 +1,22 @@
 ---
 name: file-intake
 description: >
-  通用文件入口路由器：任何文件拖入 DSH web（附件）或给出路径/URL，先识别类型，再路由到对应能力处理——
+  通用文件入口路由器：任何文件（拖入 DSH web 附件、给出本地路径或 URL）先识别类型，再路由到对应能力处理——
   图片→识图、视频→拆解/抽帧转写、音频→语音转文字、Word→docx、PDF→pdf、PPT/Excel→文本提取、
   文本/RTF→直读、ZIP→解压递归。用户拖入或引用任意文件并期望「分析/读取/处理/拆解」时触发，
-  不限于图片（图片有 dsh-vision-skill 专项，但本 skill 统一入口）。依赖：见 SKILL.md 依赖清单。
+  不限于图片（图片有 dsh-vision-skill 专项，但本 skill 统一入口）。注意：DSH 0.1.3 的 GUI 附件只接受图片，
+  非图片请给本地路径/URL。依赖：见 SKILL.md 依赖清单。
 ---
 
 # 通用文件入口（file-intake）
+
+> **路径约定（DSH 0.1.3+）**：本文档相对路径以**本技能资源目录**为基准解析（加载时 harness 给出 `Base directory for this skill`）；跨技能引用写 `..\<技能名>\...`（三个技能同根安装时成立）。
 
 **一句话**：丢进来任何文件 → 自动识别类型 → 交给最擅长它的 skill/工具处理。
 
 ## 触发
 
-- 用户消息带**任意文件附件**（attachmentId 形如 `sha256:<hex>`，不只图片）
+- 用户消息带**文件附件**（attachmentId 形如 `sha256:<hex>`；⚠️ DSH 0.1.3 的 GUI 附件只接受图片，非图片请用路径/URL）
 - 用户给出任意**本地路径 / URL**（文档、表格、音频、视频、压缩包…）
 - 用户要求「读取/分析/拆解/处理这个文件」
 
@@ -38,9 +41,11 @@ description: >
 ## 附件解析（复用 dsh-vision-skill 脚本）
 
 ```powershell
-node "$env:USERPROFILE\.agents\skills\dsh-vision-skill\scripts\resolve_attachment.mjs" "<attachmentId>"
-# 找不到时：node "...\resolve_attachment.mjs" --search "<片段>"
+node "..\dsh-vision-skill\scripts\resolve_attachment.mjs" "<attachmentId>"
+# 找不到时：node "..\dsh-vision-skill\scripts\resolve_attachment.mjs" --search "<片段>"
 ```
+
+> 附件存储位置：`<DSH_HOME>\attachments\v1\objects\<hex前2位>\<hex>`（脚本自动按 `DSH_HOME` 或 `~/.dsh` 解析）。
 
 ## 快速路由速查
 
