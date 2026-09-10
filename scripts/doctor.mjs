@@ -12,9 +12,32 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
+import path from 'node:path'
 
 const jsonOnly = process.argv.includes('--json')
+const isFile = (p) => { try { return statSync(p).isFile() } catch { return false } }
+
+/** 与 route.mjs 同源：优先 Bandizip(bz.exe)，其次 7-Zip。 */
+function findArchiver() {
+  const envBz = process.env.BANDIZIP
+  if (envBz && isFile(envBz)) return { engine: 'bandizip', exe: envBz, from: 'env:BANDIZIP' }
+  const bzOnPath = (process.env.PATH || '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((dir) => path.join(dir, process.platform === 'win32' ? 'bz.exe' : 'bz'))
+    .find(isFile)
+  if (bzOnPath) return { engine: 'bandizip', exe: bzOnPath, from: 'PATH' }
+  for (const cand of ['D:\\DD\\bandi\\Bandizip\\bz.exe', 'C:\\Program Files\\Bandizip\\bz.exe', 'C:\\Program Files (x86)\\Bandizip\\bz.exe']) {
+    if (isFile(cand)) return { engine: 'bandizip', exe: cand, from: '常见安装路径' }
+  }
+  const env7z = process.env.SEVEN_ZIP
+  if (env7z && isFile(env7z)) return { engine: '7z', exe: env7z, from: 'env:SEVEN_ZIP' }
+  for (const cand of ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe']) {
+    if (isFile(cand)) return { engine: '7z', exe: cand, from: '常见安装路径' }
+  }
+  return null
+}
 
 /** 执行命令并返回是否成功 + 首行输出。 */
 function probe(cmd, args = ['--version'], timeout = 8000) {
@@ -45,7 +68,13 @@ add('python(py)', 'runtime', true, probe('py', ['--version']), '安装 Python 3.
 add('ffmpeg', 'tool', true, probe('ffmpeg', ['-version']), 'winget install Gyan.FFmpeg')
 add('yt-dlp', 'tool', false, probe('yt-dlp', ['--version']), 'winget install yt-dlp.yt-dlp（链接类视频才需要）')
 add('deno', 'tool', false, probe('deno', ['--version']), 'winget install DenoLand.Deno（video-deconstruct 部分链路需要）')
-add('7-Zip', 'tool', false, probe('7z'), 'winget install 7zip.7zip（rar/7z 解压需要）')
+const archiver = findArchiver()
+add(
+  archiver ? `archiver(${archiver.engine})` : 'archiver(Bandizip/7-Zip)',
+  'tool', false,
+  archiver ? { ok: true, detail: `${archiver.exe}（${archiver.from}）` } : { ok: false, detail: '未检测到 bz.exe / 7z.exe' },
+  'winget install Bandizip.Bandizip（rar/7z 解压需要；装好即在 PATH 上，或设 BANDIZIP 指向 bz.exe）',
+)
 add('LibreOffice', 'tool', false, probe('soffice', ['--version']), 'winget install TheDocumentFoundation.LibreOffice（旧版 doc/xls/ppt 转换需要）')
 
 // ── Python 库 ──
@@ -58,7 +87,7 @@ add('pypdf', 'python', false, probePyModule('pypdf'), 'py -m pip install pypdf�
 add('pillow-heif', 'python', false, probePyModule('pillow_heif'), 'py -m pip install pillow-heif（HEIC/HEIF 转 PNG 后识图）')
 
 // ── 同目录脚本 ──
-for (const f of ['route.mjs', 'sniff.py', 'extract.py', 'transcribe.py', 'unzip.py']) {
+for (const f of ['route.mjs', 'sniff.py', 'extract.py', 'transcribe.py', 'unzip.py', 'batch.mjs']) {
   const p = new URL(`./${f}`, import.meta.url)
   const ok = existsSync(p)
   checks.push({ name: f, kind: 'script', required: true, ok, detail: ok ? '存在' : '缺失', ...(ok ? {} : { hint: '仓库文件不完整，请重新拉取' }) })

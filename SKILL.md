@@ -2,8 +2,9 @@
 name: file-intake
 description: >
   通用文件入口路由器：任何文件（拖入 DSH web 附件、给出本地路径或 URL）先识别类型，再路由到对应能力处理——
-  图片→识图、视频→拆解/抽帧转写、音频→语音转文字、Word/PDF/PPT/Excel→文本提取、
-  文本/RTF→直读、ZIP→解压递归。用户拖入或引用任意文件并期望「分析/读取/处理/拆解」时触发，
+  图片→识图、视频→拆解/抽帧转写、音频→语音转文字、Word/PDF/PPT/Excel/EPUB/字幕/邮件/数据库→文本提取、
+  文本/RTF→直读、zip/rar/7z→解压递归。支持目录批量（batch.mjs，带汇总）、sha256 结果缓存、
+  大文件分块（--chunk-chars / --chunk-minutes）。用户拖入或引用任意文件并期望「分析/读取/处理/拆解」时触发，
   不限于图片（图片有 dsh-vision-skill 专项，但本 skill 统一入口）。DSH 0.1.3 起非图片附件原生支持，
   模型直接拿到只读副本路径。入口命令：node scripts/route.mjs <文件>。
 ---
@@ -55,23 +56,43 @@ node scripts/doctor.mjs        # 必需项缺失会给出安装命令
 ## 工作流
 
 1. **取路径**：非图片附件用消息里的只读副本路径；图片附件用 `resolve_attachment.mjs`；路径/URL 直接用。
-2. **路由**：`node scripts/route.mjs "<路径>"`。
+2. **路由**：`node scripts/route.mjs "<路径>"`（目录会直接给出 `batch.mjs` 命令）。
 3. **执行**：跑 `command`（`extract.py` 提取文本 / `transcribe.py` 转写 / `unzip.py` 解压 / `vision.js` 识图 / video-deconstruct 拆解）。
-4. **递归**：压缩包解压后，对每个产物重新跑 route.mjs。
-5. **交付**：说明结果 + 用到的能力 + 产物路径（脚本都输出 JSON，含 `artifacts`）。
+4. **递归/批量**：压缩包解压后对每个产物重新路由；文件多就直接上 `node scripts/batch.mjs <目录>`（自动递归 + 汇总）。
+5. **交付**：说明结果 + 用到的能力 + 产物路径（脚本都输出 JSON，含 `artifacts`）；重复处理命中缓存会标 `cached: true`。
 
 ## 脚本清单
 
 | 脚本 | 作用 | 典型命令 |
 |---|---|---|
 | `scripts/route.mjs` | 路由入口（魔数+扩展名 → kind/handler/command） | `node scripts/route.mjs <文件>` |
+| `scripts/batch.mjs` | 目录/多文件/压缩包批量：路由+执行+汇总清单 | `node scripts/batch.mjs <目录> --out-dir <产物目录>` |
 | `scripts/sniff.py` | 魔数嗅探独立 CLI（手动排查用） | `py -X utf8 scripts/sniff.py <文件>` |
 | `scripts/doctor.mjs` | 依赖自检（工具 + Python 库 + 脚本完整性） | `node scripts/doctor.mjs` |
-| `scripts/extract.py` | docx/xlsx/pptx/pdf/rtf/html/ipynb/csv/txt → JSON 文本 | `py -X utf8 scripts/extract.py <文件> [--max-chars N]` |
-| `scripts/transcribe.py` | 音频/视频转写（faster-whisper）、MIDI 元数据（mido） | `py -X utf8 scripts/transcribe.py <文件> [--model small] [--lang zh]` |
-| `scripts/unzip.py` | 安全解压 zip（防路径穿越/zip 炸弹） | `py -X utf8 scripts/unzip.py <zip> [--out 目录]` |
+| `scripts/extract.py` | 文档/表格/演示/PDF/EPUB/字幕/邮件/SVG/SQLite → JSON 文本 | `py -X utf8 scripts/extract.py <文件> [--max-chars N] [--chunk-chars N] [--out 文件]` |
+| `scripts/transcribe.py` | 音频/视频转写（faster-whisper）、MIDI 元数据（mido） | `py -X utf8 scripts/transcribe.py <文件> [--model small] [--lang zh] [--chunk-minutes 10]` |
+| `scripts/unzip.py` | 安全解压 zip/rar/7z（防路径穿越/zip 炸弹） | `py -X utf8 scripts/unzip.py <压缩包> [--out 目录] [--list]` |
 
-全部脚本统一输出 JSON，失败时带 `error.code`（`NOT_FOUND` / `MISSING_DEP` / `UNSUPPORTED_TYPE` / `PARSE_ERROR` / `TOO_LARGE` …）与 `error.hint`。
+全部脚本统一输出 JSON，失败时带 `error.code`（`NOT_FOUND` / `MISSING_DEP` / `UNSUPPORTED_TYPE` / `PARSE_ERROR` / `TOO_LARGE` / `TOO_MANY_ENTRIES` / `UNSAFE_ARCHIVE` …）与 `error.hint`。
+
+### 批量（`batch.mjs`）
+
+输入可以是**目录、多个文件、压缩包**（压缩包先解压再递归）。它对每个文件路由 + 执行「本地可自动完成」的处理器（`extract.py` / `transcribe.py` / `unzip.py`），识图（耗额度）与视频拆解只给命令。输出 JSON 汇总：`counts` + 每个文件的 `status`（`ok` / `ok(cached)` / `failed` / `unsupported` / `needs-agent`）+ `artifacts`。
+
+```powershell
+node scripts/batch.mjs F:\some\dir --out-dir F:\some\out          # 实跑
+node scripts/batch.mjs F:\some\dir --dry-run                      # 只看计划
+node scripts/batch.mjs F:\a.zip --include "\.(pdf|docx)$"          # 只处理匹配文件
+```
+
+退出码：0 = 全部成功；1 = 有失败；2 = 参数错误。
+
+### 缓存与大文件
+
+- **结果缓存**：`extract.py` / `transcribe.py` 按「文件 sha256 + 处理器 + 参数」缓存到 `~/.dsh/file-intake-cache`（可用 `FILE_INTAKE_CACHE` 改路径）。重复处理秒回，`cached: true`；`--no-cache` 跳过读、`--refresh` 强制重算。
+- **文本分块**：`extract.py --chunk-chars 8000` → 输出 `chunks[]`，便于逐块交子代理后汇总（默认 `--max-chars 20000` 截断）。
+- **长音频分段**：`transcribe.py --chunk-minutes 10`（默认）超过阈值时用 ffmpeg 分段转写，`meta.chunks[]` 给出每段时间范围；`--chunk-minutes 0` 强制整段。
+- **压缩引擎**：rar/7z 走 **Bandizip `bz.exe`**（优先，PATH 或 `BANDIZIP` 环境变量），没有才退回 7-Zip（`SEVEN_ZIP`）。
 
 ## 快速路由速查（人读版，机器以 route.mjs 为准）
 
@@ -79,19 +100,24 @@ node scripts/doctor.mjs        # 必需项缺失会给出安装命令
 |---|---|---|
 | 图片 png/jpg/webp/gif | 原生 `read_image` 或 dsh-vision-skill | 多模态模型直接 `read_image`；纯文本模型走 `vision.js` |
 | 图片 bmp/tiff/avif | dsh-vision-skill | 不在原生支持列表，走 `vision.js` |
-| 图片 heic/heif | 先转码 | 本机 ffmpeg 无 HEIF 解码器 → `pip install pillow-heif` 后用 `extract.py` 转 PNG |
+| 图片 heic/heif | `extract.py` 转 PNG → 再识图 | 装了 pillow-heif 就地转 PNG（`artifacts` 给路径），没装则提示安装 |
 | 文档 docx/rtf/html/ipynb | `extract.py` | 零依赖 XML/正则提取 |
 | 表格 xlsx/xlsm | `extract.py`（openpyxl） | 每表前 20 行 + 维度 |
 | 演示 pptx | `extract.py`（python-pptx） | 每页文本 + 备注 |
-| PDF | `extract.py`（pypdf） | 未装 pypdf 时提示安装；扫描件需 OCR |
-| 旧版 doc/xls/ppt | 需转换 | 另存为 docx/xlsx 或装 LibreOffice |
-| 音频 | `transcribe.py` | faster-whisper，中文 `--lang zh` |
+| PDF | `extract.py`（pypdf） | 损坏/加密会返回 `PARSE_ERROR` + hint，不抛栈 |
+| EPUB | `extract.py` | 按 OPF spine 顺序拼章节，`meta.chapters`/`title` |
+| 字幕 srt/vtt | `extract.py` | 去序号与时间轴，`meta.cues` |
+| 邮件 eml | `extract.py` | 正文（text/plain + html）+ 收发件人/主题/附件名 |
+| 矢量 svg | `extract.py` | 提取 `<text>/<tspan>` 文本节点与 title |
+| 数据库 sqlite/db | `extract.py` | 表清单 + 行数 + 列名 + 前 5 行样本 |
+| 旧版 doc/xls/ppt | LibreOffice 转换 | 装 LibreOffice 后 `extract.py` 自动转换提取；未装时给安装提示 |
+| pages/key/numbers | LibreOffice 转换 | 同上（→ docx/pptx/xlsx 后提取） |
+| 音频 | `transcribe.py` | faster-whisper，中文 `--lang zh`，长音频自动分段 |
 | MIDI | `transcribe.py` | mido 解析曲速/音轨/音符数 |
 | 视频 | video-deconstruct | 抽帧 + 转写 + 拆解报告（只取文字可直接 `transcribe.py`） |
-| zip | `unzip.py` → 递归 | 有大小/条目数/路径穿越防护 |
-| rar/7z | 需 7-Zip | `winget install 7zip.7zip` |
-| sqlite/db | pwsh + sqlite3 | 先列表再查询 |
+| zip / rar / 7z | `unzip.py` → 递归 | zip 走 zipfile，rar/7z 走 Bandizip；有大小/条目数/路径穿越防护 |
 | exe/dll/bat/ps1 | 拒绝 | 安全边界 |
-| 无扩展名/改名 | 嗅探决定 | 文本类直接 `read`，二进制按嗅探结果路由 |
+| 无扩展名/改名 | 嗅探决定 | 文本类直接 `read`；二进制按魔数路由（PDF/OOXML/HEIC… 都能认） |
+| msg/parquet/psd/ai | 暂不支持 | 返回 `no-parser` + 转换建议 |
 
 详见 `references/route-table.md`（含各类型的额外说明与历史命令）。

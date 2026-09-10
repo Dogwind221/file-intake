@@ -18,6 +18,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -41,23 +42,41 @@ function head(file, size = 512) {
   }
 }
 
+/** 读取文件尾若干字节（默认 64KB）：zip 家族靠「中央目录」里的条目名判定最可靠。 */
+function tail(file, size = 65536) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const stat = fs.fstatSync(fd)
+    const len = Math.min(size, stat.size)
+    const buf = Buffer.alloc(len)
+    const n = fs.readSync(fd, buf, 0, len, stat.size - len)
+    return buf.subarray(0, n)
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+}
+
 const ascii = (buf, offset, len) => buf.subarray(offset, offset + len).toString('latin1')
 const hex = (buf, offset, len) => buf.subarray(offset, offset + len).toString('hex')
 
 /**
  * 按文件头判定真实类型。
  * @param {Buffer|null} buf - 文件头字节。
+ * @param {Buffer|null} tailBuf - 文件尾字节（zip 家族判定用，可省略）。
  * @returns {string|null} 类型 id（与扩展名同域），无法判定返回 null。
  */
-function sniff(buf) {
+function sniff(buf, tailBuf = null) {
   if (!buf || buf.length < 4) return null
   const b = buf
   if (ascii(b, 0, 5) === '%PDF-') return 'pdf'
   if (hex(b, 0, 4) === '504b0304') {
-    // ZIP 家族：OOXML 靠条目名区分
-    const raw = b.toString('latin1')
+    // ZIP 家族：条目名在「文件头局部区」和「尾部中央目录」两处，两处都查
+    const raw = (b.toString('latin1') + (tailBuf ? '\u0000' + tailBuf.toString('latin1') : ''))
     if (raw.includes('word/document.xml')) return 'docx'
-    if (raw.includes('xl/workbook.xml')) return 'xlsx'
+    if (raw.includes('xl/workbook.xml') || raw.includes('xl/workbook.bin')) return 'xlsx'
     if (raw.includes('ppt/presentation.xml')) return 'pptx'
     if (raw.includes('mimetype') && raw.includes('epub')) return 'epub'
     return 'zip'
@@ -102,16 +121,72 @@ function sniff(buf) {
 const IMAGE = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'avif'])
 /** 需要先转码才能识图。 */
 const IMAGE_NEEDS_CONVERT = new Set(['heic', 'heif'])
-/** 文档/表格/演示 → extract.py。 */
-const EXTRACT = new Set(['docx', 'xlsx', 'xlsm', 'pptx', 'rtf', 'html', 'htm', 'ipynb', 'csv', 'tsv', 'txt', 'md', 'json', 'yaml', 'yml', 'log', 'xml'])
+/** 文档/表格/演示/文本 → extract.py。 */
+const EXTRACT = new Set([
+  'docx', 'xlsx', 'xlsm', 'pptx', 'rtf', 'html', 'htm', 'ipynb', 'csv', 'tsv',
+  'txt', 'md', 'json', 'yaml', 'yml', 'log', 'xml',
+  'epub', 'srt', 'vtt', 'eml', 'svg', 'sqlite', 'db',
+  'pages', 'key', 'numbers',
+])
 /** 音频 → transcribe.py。 */
 const AUDIO = new Set(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'opus', 'wma', 'aiff'])
 /** 视频 → video-deconstruct。 */
 const VIDEO = new Set(['mp4', 'avi', 'mkv', 'mov', 'webm', 'flv', 'wmv', 'm4v', '3gp', 'mpg', 'mpeg', 'ts'])
 /** 可执行/脚本：拒绝路由。 */
 const EXECUTABLE = new Set(['exe', 'dll', 'msi', 'bat', 'cmd', 'ps1', 'sh', 'com', 'scr', 'vbs', 'js', 'jar'])
-/** 旧 Office 二进制（.doc/.xls/.ppt）。 */
+/** 旧 Office 二进制（.doc/.xls/.ppt）：LibreOffice 可转换。 */
 const OLE = new Set(['doc', 'xls', 'ppt'])
+/** 无本地解析器，只能提示。 */
+const NO_PARSER = new Set(['msg', 'parquet', 'psd', 'ai', 'indd', 'sketch'])
+/** zip 容器但语义是文档：扩展名优先于魔数。 */
+const ZIP_FAMILY = new Set(['docx', 'xlsx', 'xlsm', 'pptx', 'epub'])
+
+/** 查找压缩引擎：优先 Bandizip(bz.exe)，其次 7-Zip。 */
+function findArchiver() {
+  const isFile = (p) => { try { return fs.statSync(p).isFile() } catch { return false } }
+  const envBz = process.env.BANDIZIP
+  if (envBz && isFile(envBz)) return { engine: 'bandizip', exe: envBz }
+  const fromPath = (process.env.PATH || '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((dir) => path.join(dir, process.platform === 'win32' ? 'bz.exe' : 'bz'))
+    .find(isFile)
+  if (fromPath) return { engine: 'bandizip', exe: fromPath }
+  for (const cand of ['D:\\DD\\bandi\\Bandizip\\bz.exe', 'C:\\Program Files\\Bandizip\\bz.exe', 'C:\\Program Files (x86)\\Bandizip\\bz.exe', '/usr/bin/bz']) {
+    if (isFile(cand)) return { engine: 'bandizip', exe: cand }
+  }
+  const env7z = process.env.SEVEN_ZIP
+  if (env7z && isFile(env7z)) return { engine: '7z', exe: env7z }
+  for (const cand of ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/bin/7za']) {
+    if (isFile(cand)) return { engine: '7z', exe: cand }
+  }
+  return null
+}
+
+/** 查找 LibreOffice（用于旧格式 / pages/key/numbers 转换）。 */
+function findSoffice() {
+  const env = process.env.SOFFICE_BIN
+  if (env && fs.existsSync(env)) return env
+  const candidates = [
+    'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+    'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
+    '/usr/bin/soffice',
+  ]
+  return candidates.find((p) => fs.existsSync(p)) ?? null
+}
+
+/** pillow-heif 是否可用（HEIC/HEIF 能否自动转 PNG）。结果缓存，避免重复探测。 */
+let _pillowHeif = null
+function hasPillowHeif() {
+  if (_pillowHeif !== null) return _pillowHeif
+  try {
+    const res = spawnSync('py', ['-X', 'utf8', '-c', 'import pillow_heif'], { timeout: 15000, stdio: 'ignore' })
+    _pillowHeif = res.status === 0
+  } catch {
+    _pillowHeif = false
+  }
+  return _pillowHeif
+}
 
 const rel = (p) => `"${path.relative(SKILL_DIR, p).replace(/\\/g, '/')}"`
 
@@ -144,16 +219,19 @@ function route(input, opts = {}) {
   const stat = fs.statSync(file)
   if (stat.isDirectory()) {
     return finish({
-      ok: true, input: file, kind: 'directory', ext: '', sniffed: null, handler: 'batch', skill: 'file-intake',
-      command: `# 目录：对其中每个文件依次执行 node scripts/route.mjs <file>`,
-      notes: ['目录不递归解压，逐个文件路由'],
+      ok: true, input: file, kind: 'directory', ext: '', sniffed: null, handler: 'batch.mjs', skill: 'file-intake',
+      command: `node "scripts/batch.mjs" "${file}"`,
+      notes: ['目录：批处理会对其中每个文件路由 + 执行本地处理器，并输出成功/失败/产物清单'],
+      hints: ['加 --dry-run 只看计划不执行；加 --out-dir 指定产物目录'],
     })
   }
 
   const ext = (path.extname(file).slice(1) || '').toLowerCase()
   const buf = head(file)
-  const sniffed = sniff(buf)
-  const eff = sniffed ?? ext
+  const sniffed = sniff(buf, tail(file))
+  let eff = sniffed ?? ext
+  // zip 容器 + OOXML/epub 扩展名：以扩展名为准（中央目录条目名偶尔判定不出）
+  if (sniffed === 'zip' && ZIP_FAMILY.has(ext)) eff = ext
 
   if (EXECUTABLE.has(eff)) {
     return finish({ ok: false, input: file, kind: 'executable', ext, sniffed, handler: 'refuse', skill: null, command: null, notes: ['可执行/脚本文件不路由（安全边界）'], hints: ['如需分析二进制，请明确说明用途后用 pwsh/反汇编工具单独处理'] })
@@ -173,11 +251,20 @@ function route(input, opts = {}) {
   }
 
   if (IMAGE_NEEDS_CONVERT.has(eff)) {
+    const canConvert = Boolean(findSoffice()) || hasPillowHeif()
+    if (hasPillowHeif()) {
+      return finish({
+        ok: true, input: file, kind: 'image', ext, sniffed, handler: 'extract.py(heic→png)', skill: 'file-intake',
+        command: `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"`,
+        notes: ['HEIC/HEIF：extract.py 用 Pillow + pillow-heif 转成 PNG（artifacts 给出路径）', '转出的 PNG 再交给识图：node "..\\dsh-vision-skill\\scripts\\vision.js" <png> "<问题>"'],
+        hints: ['多模态会话可 read_image 该 PNG；纯文本会话用 vision.js'],
+      })
+    }
     return finish({
       ok: false, input: file, kind: 'image-needs-convert', ext, sniffed, handler: 'convert', skill: 'file-intake',
-      command: `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"`,
-      notes: ['本机 ffmpeg 不含 HEIF 解码器，HEIC/HEIF 必须先转码'],
-      hints: ['py -m pip install pillow-heif  （装好后 extract.py 会自动转 PNG 再识图）', '或：用系统「照片」/预览导出为 PNG 后重跑 route.mjs'],
+      command: null,
+      notes: ['本机 ffmpeg 不含 HEIF 解码器，且未装 pillow-heif，HEIC/HEIF 无法自动转码'],
+      hints: ['py -m pip install pillow-heif  （装好后 route.mjs 会自动改判为可处理）', '或：用系统「照片」/预览导出为 PNG 后重跑 route.mjs'],
     })
   }
 
@@ -199,10 +286,21 @@ function route(input, opts = {}) {
   }
 
   if (OLE.has(eff) || eff === 'ole') {
+    const soffice = findSoffice()
     return finish({
-      ok: false, input: file, kind: 'legacy-office', ext, sniffed, handler: 'needs-convert', skill: null, command: null,
-      notes: ['旧版二进制 Office 格式（doc/xls/ppt）无本地解析器'],
-      hints: ['用 Word/Excel 另存为 docx/xlsx 后重跑', '或安装 LibreOffice 后用 soffice --convert-to docx'],
+      ok: Boolean(soffice), input: file, kind: 'legacy-office', ext, sniffed,
+      handler: soffice ? 'extract.py(convert)' : 'needs-tool', skill: 'file-intake',
+      command: soffice ? `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"` : null,
+      notes: [soffice ? '旧版 Office：extract.py 会用 LibreOffice 转成 docx/xlsx 后提取' : '旧版二进制 Office 格式（doc/xls/ppt）需要 LibreOffice 转换'],
+      hints: soffice ? [] : ['winget install TheDocumentFoundation.LibreOffice', '或用 Word/Excel 另存为 docx/xlsx 后重跑'],
+    })
+  }
+
+  if (NO_PARSER.has(eff)) {
+    return finish({
+      ok: false, input: file, kind: 'no-parser', ext, sniffed, handler: 'unsupported', skill: null, command: null,
+      notes: [`本机没有 .${eff} 的解析器`],
+      hints: eff === 'msg' ? ['Outlook .msg 可用 LibreOffice/在线转换后按 eml 处理'] : [`如需处理 .${eff}，请先转成通用格式（png/pdf/csv）`],
     })
   }
 
@@ -231,28 +329,24 @@ function route(input, opts = {}) {
     })
   }
 
-  if (eff === 'zip') {
+  if (eff === 'zip' || eff === 'rar' || eff === '7z') {
+    const archiver = findArchiver()
+    const needExt = eff !== 'zip'
+    if (needExt && !archiver) {
+      return finish({
+        ok: false, input: file, kind: 'archive', ext, sniffed, handler: 'needs-tool', skill: null, command: null,
+        notes: ['未检测到 Bandizip(bz.exe) 或 7-Zip（rar/7z 需要其一）'],
+        hints: ['装 Bandizip 后 bz.exe 在 PATH 上即可', '或设置 BANDIZIP / SEVEN_ZIP 指向可执行文件'],
+      })
+    }
     return finish({
       ok: true, input: file, kind: 'archive', ext, sniffed, handler: 'unzip.py', skill: 'file-intake',
       command: `${PY} ${rel(path.join(__dirname, 'unzip.py'))} "${file}"`,
-      notes: ['解压后对每个文件重新跑 route.mjs（递归路由）'],
-      hints: ['有大小/条目数上限保护，超限会拒绝'],
-    })
-  }
-
-  if (eff === 'rar' || eff === '7z') {
-    return finish({
-      ok: false, input: file, kind: 'archive', ext, sniffed, handler: 'needs-tool', skill: null, command: null,
-      notes: ['本机未检测到 7-Zip / WinRAR'],
-      hints: ['winget install 7zip.7zip', '或先手动解压再用 file-intake 处理解压后的文件'],
-    })
-  }
-
-  if (eff === 'sqlite' || eff === 'db') {
-    return finish({
-      ok: true, input: file, kind: 'database', ext, sniffed, handler: 'pwsh', skill: null,
-      command: `${PY} -c "import sqlite3,sys; c=sqlite3.connect(r'${file}'); print([r[0] for r in c.execute(\\"select name from sqlite_master where type='table'\\")])"`,
-      notes: ['SQLite：先用上面的命令列出表，再按需查询'],
+      notes: [
+        needExt ? `rar/7z 走 ${archiver.engine}（${archiver.exe}）` : 'zip 走 Python zipfile（无需外部工具）',
+        '解压后对每个文件重新跑 route.mjs（或用 batch.mjs 自动递归）',
+      ],
+      hints: ['有条目数/解压体积/路径穿越防护，超限会拒绝', '批量递归：node scripts/batch.mjs "<压缩包>"'],
     })
   }
 
@@ -304,7 +398,8 @@ if (!input) {
 if (sniffOnly) {
   const file = path.resolve(input)
   const buf = fs.existsSync(file) && fs.statSync(file).isFile() ? head(file) : null
-  console.log(JSON.stringify({ input: file, sniffed: sniff(buf), head: buf ? hex(buf, 0, 12) : null }, null, 2))
+  const tailBuf = buf ? tail(file) : null
+  console.log(JSON.stringify({ input: file, sniffed: sniff(buf, tailBuf), head: buf ? hex(buf, 0, 12) : null }, null, 2))
   process.exit(buf ? 0 : 1)
 }
 
