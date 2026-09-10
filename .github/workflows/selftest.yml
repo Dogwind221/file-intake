@@ -1,0 +1,28 @@
+name: selftest
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    env:
+      # Windows 用 py 启动器；Linux/macOS 用 python3
+      FILE_INTAKE_PY: python3
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装轻量解析依赖（缺失的会在自测里自动 skip）
+        run: python3 -m pip install --quiet --upgrade pip openpyxl python-pptx xlrd xlwt mido pillow pypdf pillow-heif
+      - name: 依赖自检
+        run: node scripts/doctor.mjs || true
+      - name: 自测（路由 / 提取 / 缓存 / 解压防护 / 批量汇总）
+        run: node scripts/selftest.mjs --verbose

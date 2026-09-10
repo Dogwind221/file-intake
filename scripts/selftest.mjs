@@ -31,7 +31,9 @@ const cache = path.join(tmp, 'cache')
 fs.mkdirSync(fx, { recursive: true })
 fs.mkdirSync(out, { recursive: true })
 fs.mkdirSync(cache, { recursive: true })
-const env = { ...process.env, FILE_INTAKE_CACHE: cache }
+const env = { ...process.env, FILE_INTAKE_CACHE: cache, PYTHONDONTWRITEBYTECODE: '1' }
+/** 实际调用的 Python 解释器（Linux/macOS 可设 FILE_INTAKE_PY=python3；CI 上必须设）。 */
+const PY_BIN = process.env.FILE_INTAKE_PY || 'py'
 
 /* ================= 断言框架 ================= */
 
@@ -48,22 +50,22 @@ function run(cmd, args, opts = {}) {
   return { code: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '', failedToStart: Boolean(res.error) }
 }
 
-const hasPy = !run('py', ['-X', 'utf8', '-c', 'print(1)']).failedToStart
+const hasPy = !run(PY_BIN, ['-X', 'utf8', '-c', 'print(1)']).failedToStart
 /** 调试用：FILE_INTAKE_SELFTEST_FAKE_MISSING=pyarrow,xlwt 可强制把某些依赖当缺失，验证 skip 分支。 */
 const FAKE_MISSING = (process.env.FILE_INTAKE_SELFTEST_FAKE_MISSING || '')
   .split(',').map((s) => s.trim()).filter(Boolean)
-const pyModule = (mod) => !FAKE_MISSING.includes(mod) && hasPy && run('py', ['-X', 'utf8', '-c', `import ${mod}`]).code === 0
+const pyModule = (mod) => !FAKE_MISSING.includes(mod) && hasPy && run(PY_BIN, ['-X', 'utf8', '-c', `import ${mod}`]).code === 0
 
 const route = (file) => {
   const r = run(process.execPath, [path.join(__dirname, 'route.mjs'), file, '--json'])
   try { return JSON.parse(r.stdout) } catch { return null }
 }
 const extract = (file, extraArgs = []) => {
-  const r = run('py', ['-X', 'utf8', path.join(__dirname, 'extract.py'), file, ...extraArgs])
+  const r = run(PY_BIN, ['-X', 'utf8', path.join(__dirname, 'extract.py'), file, ...extraArgs])
   try { return JSON.parse(r.stdout) } catch { return null }
 }
 const unzip = (file, extraArgs = []) => {
-  const r = run('py', ['-X', 'utf8', path.join(__dirname, 'unzip.py'), file, ...extraArgs])
+  const r = run(PY_BIN, ['-X', 'utf8', path.join(__dirname, 'unzip.py'), file, ...extraArgs])
   try { return JSON.parse(r.stdout) } catch { return null }
 }
 const batch = (file, extraArgs = []) => {
@@ -210,7 +212,7 @@ const pyFixtures = {}
 function pyMake(key, code, requires) {
   if (requires && !pyModule(requires)) { pyFixtures[key] = { skipped: requires }; return }
   if (!hasPy) { pyFixtures[key] = { skipped: 'py' }; return }
-  const r = run('py', ['-X', 'utf8', '-c', code])
+  const r = run(PY_BIN, ['-X', 'utf8', '-c', code])
   pyFixtures[key] = r.code === 0 ? { file: path.join(fx, key) } : { failed: (r.stderr || '').trim().split('\n').slice(-1)[0] }
 }
 

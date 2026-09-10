@@ -107,6 +107,9 @@ node scripts/selftest.mjs --keep   # 保留临时目录便于排查
 
 覆盖：路由结论（含魔数兜底、拒绝、目录）、`extract.py` 交付契约与文本内容、缓存命中、zip 路径穿越拒绝、条目数上限、`batch.mjs` 汇总。缺依赖的可选项（pillow-heif / pyarrow / extract-msg / Bandizip）自动跳过并在末尾列出 `skip`。
 
+> **非 Windows**：脚本默认用 Windows 的 `py` 启动器；Linux/macOS 设 `FILE_INTAKE_PY=python3` 即可（CI 里就是这么跑的）。
+
+
 ### 批量（`batch.mjs`）
 
 输入可以是**目录、多个文件、压缩包**（压缩包先解压再递归）。它对每个文件路由 + 执行「本地可自动完成」的处理器（`extract.py` / `transcribe.py` / `unzip.py`），识图（耗额度）与视频拆解只给命令。输出 JSON 汇总：`counts` + 顶层 `artifacts[]` + `summary`，每个文件带 `status`（`ok` / `ok(cached)` / `failed` / `unsupported` / `needs-agent`）、`artifacts[]` 与自己的 `summary`。

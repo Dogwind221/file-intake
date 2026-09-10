@@ -49,9 +49,12 @@ function probe(cmd, args = ['--version'], timeout = 8000) {
   }
 }
 
+/** 实际调用的 Python 解释器（Linux/macOS 可设 FILE_INTAKE_PY=python3）。 */
+const PY_BIN = process.env.FILE_INTAKE_PY || 'py'
+
 /** 探测 Python 模块是否可导入。 */
 function probePyModule(mod) {
-  const res = probe('py', ['-X', 'utf8', '-c', `import ${mod}`])
+  const res = probe(PY_BIN, ['-X', 'utf8', '-c', `import ${mod}`])
   return { ok: res.ok, detail: res.ok ? '已安装' : '未安装' }
 }
 
@@ -62,7 +65,7 @@ const add = (name, kind, required, res, hint) => {
 
 // ── 运行时 ──
 add('node', 'runtime', true, probe('node'), '安装 Node.js 22+')
-add('python(py)', 'runtime', true, probe('py', ['--version']), '安装 Python 3.10+')
+add('python(py)', 'runtime', true, probe(PY_BIN, ['--version']), '安装 Python 3.10+（Windows 用 py 启动器；其它平台设 FILE_INTAKE_PY=python3）')
 
 // ── 外部工具 ──
 add('ffmpeg', 'tool', true, probe('ffmpeg', ['-version']), 'winget install Gyan.FFmpeg')

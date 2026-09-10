@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SKILL_DIR = path.resolve(__dirname, '..')
 const PY = 'py -X utf8'
+/** 实际调用的 Python 解释器（Windows 用 py 启动器；Linux/macOS 可设 FILE_INTAKE_PY=python3）。 */
+const PY_BIN = process.env.FILE_INTAKE_PY || 'py'
 
 /* ================= 魔数嗅探 ================= */
 
@@ -183,7 +185,7 @@ function pyModule(mod) {
   if (_pyMod.has(mod)) return _pyMod.get(mod)
   let ok = false
   try {
-    ok = spawnSync('py', ['-X', 'utf8', '-c', `import ${mod}`], { timeout: 20000, stdio: 'ignore' }).status === 0
+    ok = spawnSync(PY_BIN, ['-X', 'utf8', '-c', `import ${mod}`], { timeout: 20000, stdio: 'ignore' }).status === 0
   } catch {
     ok = false
   }

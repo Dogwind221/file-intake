@@ -46,6 +46,8 @@ const AUTO_HANDLERS = new Set([
   'transcribe.py', 'transcribe.py(mido)', 'unzip.py',
 ])
 const PY = 'py -X utf8'
+/** 实际调用的 Python 解释器（Linux/macOS 可设 FILE_INTAKE_PY=python3）。 */
+const PY_BIN = process.env.FILE_INTAKE_PY || 'py'
 
 /** 递归收集文件。 */
 function collect(target, acc = []) {
@@ -76,13 +78,13 @@ function execute(handler, file) {
   const out = path.join(outDir, path.basename(file) + '.txt')
   let cmd, args
   if (handler.startsWith('extract.py')) {
-    cmd = 'py'
+    cmd = PY_BIN
     args = ['-X', 'utf8', path.join(__dirname, 'extract.py'), file, '--out', out]
   } else if (handler.startsWith('transcribe.py')) {
-    cmd = 'py'
+    cmd = PY_BIN
     args = ['-X', 'utf8', path.join(__dirname, 'transcribe.py'), file, '--out', out]
   } else if (handler === 'unzip.py') {
-    cmd = 'py'
+    cmd = PY_BIN
     args = ['-X', 'utf8', path.join(__dirname, 'unzip.py'), file, '--out', path.join(outDir, path.basename(file, path.extname(file)) + '_unzip')]
   } else {
     return { ok: false, skipped: true, error: { code: 'NOT_AUTO', message: `handler ${handler} 需人工/agent 决策` } }
