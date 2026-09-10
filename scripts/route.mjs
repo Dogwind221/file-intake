@@ -125,7 +125,7 @@ const IMAGE_NEEDS_CONVERT = new Set(['heic', 'heif'])
 const EXTRACT = new Set([
   'docx', 'xlsx', 'xlsm', 'pptx', 'rtf', 'html', 'htm', 'ipynb', 'csv', 'tsv',
   'txt', 'md', 'json', 'yaml', 'yml', 'log', 'xml',
-  'epub', 'srt', 'vtt', 'eml', 'svg', 'sqlite', 'db',
+  'epub', 'srt', 'vtt', 'eml', 'svg', 'sqlite', 'db', 'msg', 'parquet',
   'pages', 'key', 'numbers',
 ])
 /** 音频 → transcribe.py。 */
@@ -137,9 +137,11 @@ const EXECUTABLE = new Set(['exe', 'dll', 'msi', 'bat', 'cmd', 'ps1', 'sh', 'com
 /** 旧 Office 二进制（.doc/.xls/.ppt）：LibreOffice 可转换。 */
 const OLE = new Set(['doc', 'xls', 'ppt'])
 /** 无本地解析器，只能提示。 */
-const NO_PARSER = new Set(['msg', 'parquet', 'psd', 'ai', 'indd', 'sketch'])
+const NO_PARSER = new Set(['ai', 'indd', 'sketch'])
 /** zip 容器但语义是文档：扩展名优先于魔数。 */
 const ZIP_FAMILY = new Set(['docx', 'xlsx', 'xlsm', 'pptx', 'epub'])
+/** OLE 复合文档：扩展名决定语义（doc/xls/ppt/msg）。 */
+const OLE_FAMILY = new Set(['doc', 'xls', 'ppt', 'msg'])
 
 /** 查找压缩引擎：优先 Bandizip(bz.exe)，其次 7-Zip。 */
 function findArchiver() {
@@ -175,20 +177,43 @@ function findSoffice() {
   return candidates.find((p) => fs.existsSync(p)) ?? null
 }
 
-/** pillow-heif 是否可用（HEIC/HEIF 能否自动转 PNG）。结果缓存，避免重复探测。 */
-let _pillowHeif = null
-function hasPillowHeif() {
-  if (_pillowHeif !== null) return _pillowHeif
+/** Python 模块是否可导入（结果缓存，避免重复探测）。 */
+const _pyMod = new Map()
+function pyModule(mod) {
+  if (_pyMod.has(mod)) return _pyMod.get(mod)
+  let ok = false
   try {
-    const res = spawnSync('py', ['-X', 'utf8', '-c', 'import pillow_heif'], { timeout: 15000, stdio: 'ignore' })
-    _pillowHeif = res.status === 0
+    ok = spawnSync('py', ['-X', 'utf8', '-c', `import ${mod}`], { timeout: 20000, stdio: 'ignore' }).status === 0
   } catch {
-    _pillowHeif = false
+    ok = false
   }
-  return _pillowHeif
+  _pyMod.set(mod, ok)
+  return ok
+}
+
+/** pillow-heif 是否可用（HEIC/HEIF 能否自动转 PNG）。 */
+function hasPillowHeif() {
+  return pyModule('PIL') && pyModule('pillow_heif')
 }
 
 const rel = (p) => `"${path.relative(SKILL_DIR, p).replace(/\\/g, '/')}"`
+
+/** 各类型路由备注。 */
+function excNotes(eff) {
+  const map = {
+    msg: ['Outlook .msg：extract.py 用 extract-msg 读主题/收发件人/日期/附件名/正文'],
+    parquet: ['parquet：extract.py 用 pyarrow 读 schema + 首批行（不全量载入）'],
+    epub: ['EPUB：按 OPF spine 顺序拼章节，meta.chapters 给章节数'],
+    srt: ['字幕：去序号与时间轴，meta.cues 给条数'],
+    vtt: ['字幕：去 WEBVTT 头与时间轴，meta.cues 给条数'],
+    eml: ['邮件：正文（text/plain + html）+ 收发件人/主题/附件名'],
+    svg: ['SVG：提取 <text>/<tspan> 文本节点；要看图形先转 PNG 再识图'],
+    sqlite: ['SQLite：只读打开，表清单 + 行数 + 列名 + 前 5 行样本'],
+    db: ['SQLite：只读打开，表清单 + 行数 + 列名 + 前 5 行样本'],
+  }
+  if (map[eff]) return map[eff]
+  return ['纯文本类（txt/md/json/csv/log/xml）原生 read 工具也可直读；本脚本用于统一结构化输出']
+}
 
 /**
  * 生成路由结论。
@@ -232,6 +257,8 @@ function route(input, opts = {}) {
   let eff = sniffed ?? ext
   // zip 容器 + OOXML/epub 扩展名：以扩展名为准（中央目录条目名偶尔判定不出）
   if (sniffed === 'zip' && ZIP_FAMILY.has(ext)) eff = ext
+  // OLE 复合文档：doc/xls/ppt/msg 都是 d0cf11e0 开头，语义靠扩展名
+  if (sniffed === 'ole' && OLE_FAMILY.has(ext)) eff = ext
 
   if (EXECUTABLE.has(eff)) {
     return finish({ ok: false, input: file, kind: 'executable', ext, sniffed, handler: 'refuse', skill: null, command: null, notes: ['可执行/脚本文件不路由（安全边界）'], hints: ['如需分析二进制，请明确说明用途后用 pwsh/反汇编工具单独处理'] })
@@ -251,7 +278,6 @@ function route(input, opts = {}) {
   }
 
   if (IMAGE_NEEDS_CONVERT.has(eff)) {
-    const canConvert = Boolean(findSoffice()) || hasPillowHeif()
     if (hasPillowHeif()) {
       return finish({
         ok: true, input: file, kind: 'image', ext, sniffed, handler: 'extract.py(heic→png)', skill: 'file-intake',
@@ -272,7 +298,23 @@ function route(input, opts = {}) {
     return finish({
       ok: true, input: file, kind: 'document', ext, sniffed, handler: 'extract.py', skill: 'file-intake',
       command: `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"`,
-      notes: ['纯文本类（txt/md/json/csv/log）原生 read 工具也可直读；本脚本用于统一结构化输出'],
+      notes: excNotes(eff),
+    })
+  }
+
+  if (eff === 'psd') {
+    if (pyModule('PIL')) {
+      return finish({
+        ok: true, input: file, kind: 'image', ext, sniffed, handler: 'extract.py(psd→png)', skill: 'file-intake',
+        command: `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"`,
+        notes: ['PSD：extract.py 用 Pillow 导出合成图 PNG（artifacts 给路径）+ 图层数元数据', '导出的 PNG 再交给识图：node "..\\dsh-vision-skill\\scripts\\vision.js" <png> "<问题>"'],
+        hints: ['只看最终效果图就够用；要单个图层请在 Photoshop 里导出'],
+      })
+    }
+    return finish({
+      ok: false, input: file, kind: 'no-parser', ext, sniffed, handler: 'needs-tool', skill: null, command: null,
+      notes: ['缺少 Pillow，无法导出 PSD 合成图'],
+      hints: ['py -m pip install pillow', '或在 Photoshop/预览里导出 PNG 后重跑'],
     })
   }
 
@@ -287,12 +329,20 @@ function route(input, opts = {}) {
 
   if (OLE.has(eff) || eff === 'ole') {
     const soffice = findSoffice()
+    if (eff === 'xls' && pyModule('xlrd')) {
+      return finish({
+        ok: true, input: file, kind: 'spreadsheet', ext, sniffed, handler: 'extract.py(xlrd)', skill: 'file-intake',
+        command: `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"`,
+        notes: ['旧版 .xls（BIFF）：xlrd 直接解析，无需 LibreOffice', '每表前 20 行 + 行列数，meta.sheets'],
+        hints: ['需要公式/图表等高级内容时，用 WPS/Excel 另存为 xlsx 后重跑'],
+      })
+    }
     return finish({
       ok: Boolean(soffice), input: file, kind: 'legacy-office', ext, sniffed,
       handler: soffice ? 'extract.py(convert)' : 'needs-tool', skill: 'file-intake',
       command: soffice ? `${PY} ${rel(path.join(__dirname, 'extract.py'))} "${file}"` : null,
-      notes: [soffice ? '旧版 Office：extract.py 会用 LibreOffice 转成 docx/xlsx 后提取' : '旧版二进制 Office 格式（doc/xls/ppt）需要 LibreOffice 转换'],
-      hints: soffice ? [] : ['winget install TheDocumentFoundation.LibreOffice', '或用 Word/Excel 另存为 docx/xlsx 后重跑'],
+      notes: [soffice ? '旧版 Office：extract.py 会用 LibreOffice 转成 docx/pptx 后提取' : '旧版二进制格式（doc/ppt）需要 LibreOffice 转换'],
+      hints: soffice ? [] : ['winget install TheDocumentFoundation.LibreOffice', '或用 WPS/Office 另存为 docx/pptx 后重跑'],
     })
   }
 
@@ -300,7 +350,9 @@ function route(input, opts = {}) {
     return finish({
       ok: false, input: file, kind: 'no-parser', ext, sniffed, handler: 'unsupported', skill: null, command: null,
       notes: [`本机没有 .${eff} 的解析器`],
-      hints: eff === 'msg' ? ['Outlook .msg 可用 LibreOffice/在线转换后按 eml 处理'] : [`如需处理 .${eff}，请先转成通用格式（png/pdf/csv）`],
+      hints: eff === 'ai'
+        ? ['PDF 兼容的 .ai（多数新版）会被魔数识别为 pdf 直接提取；纯 PostScript 版请在 Illustrator 里导出 PDF/PNG']
+        : [`如需处理 .${eff}，请先转成通用格式（png/pdf/csv）`],
     })
   }
 

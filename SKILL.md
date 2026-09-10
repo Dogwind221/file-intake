@@ -2,7 +2,7 @@
 name: file-intake
 description: >
   通用文件入口路由器：任何文件（拖入 DSH web 附件、给出本地路径或 URL）先识别类型，再路由到对应能力处理——
-  图片→识图、视频→拆解/抽帧转写、音频→语音转文字、Word/PDF/PPT/Excel/EPUB/字幕/邮件/数据库→文本提取、
+  图片→识图、视频→拆解/抽帧转写、音频→语音转文字、Word/PDF/PPT/Excel/EPUB/字幕/邮件（eml·msg）/数据库/PSD/parquet→文本提取、
   文本/RTF→直读、zip/rar/7z→解压递归。支持目录批量（batch.mjs，带汇总）、sha256 结果缓存、
   大文件分块（--chunk-chars / --chunk-minutes）。用户拖入或引用任意文件并期望「分析/读取/处理/拆解」时触发，
   不限于图片（图片有 dsh-vision-skill 专项，但本 skill 统一入口）。DSH 0.1.3 起非图片附件原生支持，
@@ -69,7 +69,7 @@ node scripts/doctor.mjs        # 必需项缺失会给出安装命令
 | `scripts/batch.mjs` | 目录/多文件/压缩包批量：路由+执行+汇总清单 | `node scripts/batch.mjs <目录> --out-dir <产物目录>` |
 | `scripts/sniff.py` | 魔数嗅探独立 CLI（手动排查用） | `py -X utf8 scripts/sniff.py <文件>` |
 | `scripts/doctor.mjs` | 依赖自检（工具 + Python 库 + 脚本完整性） | `node scripts/doctor.mjs` |
-| `scripts/extract.py` | 文档/表格/演示/PDF/EPUB/字幕/邮件/SVG/SQLite → JSON 文本 | `py -X utf8 scripts/extract.py <文件> [--max-chars N] [--chunk-chars N] [--out 文件]` |
+| `scripts/extract.py` | 文档/表格/演示/PDF/EPUB/字幕/邮件/SVG/SQLite/PSD/parquet/msg → JSON 文本 | `py -X utf8 scripts/extract.py <文件> [--max-chars N] [--chunk-chars N] [--out 文件]` |
 | `scripts/transcribe.py` | 音频/视频转写（faster-whisper）、MIDI 元数据（mido） | `py -X utf8 scripts/transcribe.py <文件> [--model small] [--lang zh] [--chunk-minutes 10]` |
 | `scripts/unzip.py` | 安全解压 zip/rar/7z（防路径穿越/zip 炸弹） | `py -X utf8 scripts/unzip.py <压缩包> [--out 目录] [--list]` |
 
@@ -108,9 +108,13 @@ node scripts/batch.mjs F:\a.zip --include "\.(pdf|docx)$"          # 只处理�
 | EPUB | `extract.py` | 按 OPF spine 顺序拼章节，`meta.chapters`/`title` |
 | 字幕 srt/vtt | `extract.py` | 去序号与时间轴，`meta.cues` |
 | 邮件 eml | `extract.py` | 正文（text/plain + html）+ 收发件人/主题/附件名 |
+| 邮件 msg（Outlook） | `extract.py`（extract-msg） | OLE 复合文档：主题/收发件人/日期/附件名/正文 |
+| parquet | `extract.py`（pyarrow） | schema + 行列数 + 首批行（不全量载入） |
+| PSD | `extract.py`（Pillow） | 导出合成图 PNG（`artifacts` 给路径）+ 图层数，再识图 |
 | 矢量 svg | `extract.py` | 提取 `<text>/<tspan>` 文本节点与 title |
 | 数据库 sqlite/db | `extract.py` | 表清单 + 行数 + 列名 + 前 5 行样本 |
-| 旧版 doc/xls/ppt | LibreOffice 转换 | 装 LibreOffice 后 `extract.py` 自动转换提取；未装时给安装提示 |
+| 旧版 xls | `extract.py`（xlrd） | BIFF 直接解析，**无需** LibreOffice |
+| 旧版 doc/ppt | LibreOffice 转换 | 装 LibreOffice 后 `extract.py` 自动转换提取；未装时给安装提示 |
 | pages/key/numbers | LibreOffice 转换 | 同上（→ docx/pptx/xlsx 后提取） |
 | 音频 | `transcribe.py` | faster-whisper，中文 `--lang zh`，长音频自动分段 |
 | MIDI | `transcribe.py` | mido 解析曲速/音轨/音符数 |
@@ -118,6 +122,7 @@ node scripts/batch.mjs F:\a.zip --include "\.(pdf|docx)$"          # 只处理�
 | zip / rar / 7z | `unzip.py` → 递归 | zip 走 zipfile，rar/7z 走 Bandizip；有大小/条目数/路径穿越防护 |
 | exe/dll/bat/ps1 | 拒绝 | 安全边界 |
 | 无扩展名/改名 | 嗅探决定 | 文本类直接 `read`；二进制按魔数路由（PDF/OOXML/HEIC… 都能认） |
-| msg/parquet/psd/ai | 暂不支持 | 返回 `no-parser` + 转换建议 |
+| ai（Illustrator） | 看版本 | PDF 兼容版按魔数走 PDF 提取；纯 PostScript 版提示导出 PDF/PNG |
+| indd/sketch | 暂不支持 | 返回 `no-parser` + 转换建议 |
 
 详见 `references/route-table.md`（含各类型的额外说明与历史命令）。

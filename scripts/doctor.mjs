@@ -75,16 +75,19 @@ add(
   archiver ? { ok: true, detail: `${archiver.exe}（${archiver.from}）` } : { ok: false, detail: '未检测到 bz.exe / 7z.exe' },
   'winget install Bandizip.Bandizip（rar/7z 解压需要；装好即在 PATH 上，或设 BANDIZIP 指向 bz.exe）',
 )
-add('LibreOffice', 'tool', false, probe('soffice', ['--version']), 'winget install TheDocumentFoundation.LibreOffice（旧版 doc/xls/ppt 转换需要）')
+add('LibreOffice', 'tool', false, probe('soffice', ['--version']), 'winget install TheDocumentFoundation.LibreOffice（旧版 doc/ppt/pages/key/numbers 转换需要；.xls 已由 xlrd 直接支持）')
 
 // ── Python 库 ──
 add('faster-whisper', 'python', true, probePyModule('faster_whisper'), 'py -m pip install faster-whisper（音频/视频转写）')
 add('openpyxl', 'python', true, probePyModule('openpyxl'), 'py -m pip install openpyxl（xlsx 读取）')
+add('xlrd', 'python', false, probePyModule('xlrd'), 'py -m pip install xlrd（旧版 .xls 读取）')
 add('python-pptx', 'python', true, probePyModule('pptx'), 'py -m pip install python-pptx（pptx 读取）')
 add('mido', 'python', false, probePyModule('mido'), 'py -m pip install mido（MIDI 元数据）')
 add('Pillow', 'python', false, probePyModule('PIL'), 'py -m pip install pillow')
 add('pypdf', 'python', false, probePyModule('pypdf'), 'py -m pip install pypdf（PDF 文本提取）')
 add('pillow-heif', 'python', false, probePyModule('pillow_heif'), 'py -m pip install pillow-heif（HEIC/HEIF 转 PNG 后识图）')
+add('pyarrow', 'python', false, probePyModule('pyarrow'), 'py -m pip install pyarrow（parquet 读取）')
+add('extract-msg', 'python', false, probePyModule('extract_msg'), 'py -m pip install extract-msg（Outlook .msg 读取）')
 
 // ── 同目录脚本 ──
 for (const f of ['route.mjs', 'sniff.py', 'extract.py', 'transcribe.py', 'unzip.py', 'batch.mjs']) {

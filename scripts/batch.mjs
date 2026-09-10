@@ -41,7 +41,8 @@ const dryRun = flag('--dry-run')
 
 /** 本地可自动执行的处理器（其余只给命令）。 */
 const AUTO_HANDLERS = new Set([
-  'extract.py', 'extract.py(pypdf)', 'extract.py(convert)', 'extract.py(heic→png)',
+  'extract.py', 'extract.py(pypdf)', 'extract.py(convert)', 'extract.py(xlrd)',
+  'extract.py(heic→png)', 'extract.py(psd→png)',
   'transcribe.py', 'transcribe.py(mido)', 'unzip.py',
 ])
 const PY = 'py -X utf8'

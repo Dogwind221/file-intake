@@ -8,7 +8,7 @@
 | 图片 | 识图（dsh-vision-skill）；HEIC/HEIF 先转 PNG |
 | 视频 | 拆解/抽帧转写（video-deconstruct） |
 | 音频 | 语音转文字（faster-whisper，长音频自动分段） |
-| Word / PDF / PPT / Excel / EPUB / 字幕 / 邮件 / SVG / SQLite | `extract.py` 文本提取 |
+| Word / PDF / PPT / Excel（含旧版 xls）/ EPUB / 字幕 / 邮件（eml·msg）/ SVG / PSD / SQLite / parquet | `extract.py` 文本提取 |
 | 文本 / RTF | 直读或 `extract.py` |
 | zip / rar / 7z | 安全解压（Bandizip 引擎）并递归 |
 | 目录 / 多文件 / 压缩包 | `batch.mjs` 批量路由 + 汇总 |

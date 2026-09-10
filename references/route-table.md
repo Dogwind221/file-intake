@@ -46,27 +46,30 @@
 | 扩展名 | 处理 |
 |---|---|
 | docx | `extract.py`：零依赖解析 `word/document.xml` |
-| doc（旧二进制） | `extract.py` 用 LibreOffice 转 docx 后提取；没装 soffice 时 route.mjs 给 `needs-tool` + 安装命令 |
+| doc（旧二进制） | `extract.py` 用 LibreOffice 转 docx 后提取；没装 soffice 时 route.mjs 给 `needs-tool` + 安装命令（或用 WPS/Office 另存为 docx） |
 | pdf | `extract.py`（pypdf）：按页输出，`meta.pages`；损坏/加密返回 `PARSE_ERROR` + hint（不抛栈）。扫描件需 OCR，复杂操作转 pdf skill |
 | pptx | `extract.py`（python-pptx）：每页文本 + 备注 |
 | ppt（旧格式） | 同 doc，走 LibreOffice 转换 |
 | epub | `extract.py`：按 OPF spine 顺序拼章节，`meta.chapters/title` |
 | srt vtt | `extract.py`：去序号与时间轴，`meta.cues` |
 | eml | `extract.py`：正文（text/plain + html）+ 收发件人/主题/日期/附件名 |
+| msg（Outlook） | `extract.py`（extract-msg）：OLE 复合文档 → 主题/收发件人/日期/附件名/正文；未装库时 `MISSING_DEP` + 安装命令 |
 | svg | `extract.py`：提取 `<text>/<tspan>` 与 title（矢量图内容需渲染时先转 PNG） |
+| psd | `extract.py`（Pillow）：导出合成图 PNG（`artifacts` 给路径）+ 尺寸/模式/图层数，再走识图 |
 | html htm | `extract.py`：去脚本/样式后取正文 |
 | ipynb rtf | `extract.py` |
 | txt md json yaml xml log csv tsv | `extract.py` 统一结构化输出；也可用 `read` 工具直读 |
 | pages key numbers | 走 LibreOffice 转换（→ docx/pptx/xlsx）后提取 |
-| msg | 本机无解析器 → route.mjs 给 `no-parser` + 转换建议 |
+| ai（Illustrator） | PDF 兼容版会被魔数识别为 pdf 直接提取；纯 PostScript 版提示导出 PDF/PNG |
 
 ## 表格
 
 | 扩展名 | 处理 |
 |---|---|
 | xlsx xlsm | `extract.py`（openpyxl）：每表前 20 行 + 维度，`meta.sheets` |
-| xls（旧格式） | LibreOffice 转 xlsx 后提取 |
+| xls（旧格式） | `extract.py`（xlrd）：BIFF 直接解析，**无需** LibreOffice |
 | csv tsv | `extract.py`：嗅探分隔符 + 前 50 行预览 |
+| parquet | `extract.py`（pyarrow）：行列数 + row group 数 + 列类型 + 首批行（不全量载入） |
 
 ## 数据库
 
@@ -90,7 +93,7 @@
 - 扩展名缺失/改名：`route.mjs`/`extract.py` 都按魔数兜底（PDF、OOXML、EPUB、HEIC、SQLite、RTF、7z/RAR、OLE…）；
   纯文本 → 直接 `read`；二进制无法判定 → `ok: false, kind: unknown` + 魔数十六进制（便于人工判断）。
 - exe dll msi bat cmd ps1 sh com scr vbs js jar → **拒绝**（安全边界），需明确用途再单独处理。
-- parquet psd ai indd sketch → 本机无解析器，提示先转通用格式。
+- indd sketch → 本机无解析器，提示先转通用格式。
 
 ## 路由优先级
 

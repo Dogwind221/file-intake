@@ -8,12 +8,15 @@
 
 支持:
     docx xlsx xlsm pptx  → 零依赖 / openpyxl / python-pptx
+    xls                  → xlrd（旧版 Excel，无需 LibreOffice）
     pdf                  → pypdf（未装时给安装提示）
     rtf html ipynb csv tsv txt md json yaml xml log  → 零依赖
-    epub srt vtt eml svg → 零依赖（zip / email / 正则）
-    sqlite db            → 表清单 + 行数 + 抽样
+    epub srt vtt eml svg sqlite db → 零依赖（zip / email / sqlite3 / 正则）
+    msg                  → extract-msg（Outlook .msg）
+    parquet              → pyarrow（schema + 首批行）
     doc xls ppt pages key numbers → LibreOffice 转换后提取（需 soffice）
     heic heif            → 转 PNG（需 Pillow + pillow-heif）
+    psd                  → 导出合成图 PNG（需 Pillow）
 
 缓存: 按「文件 sha256 + 处理器 + 参数」缓存结果到 ~/.dsh/file-intake-cache
       （可用 FILE_INTAKE_CACHE 覆盖；--no-cache 跳过读，--refresh 强制重算）
@@ -167,6 +170,23 @@ def extract_xlsx(path, max_rows=20):
         meta["sheets"].append({"name": ws.title, "rows": ws.max_row, "cols": ws.max_column})
         parts.append(f"=== {ws.title} ({ws.max_row}x{ws.max_column}) ===\n" + "\n".join(rows))
     wb.close()
+    return {"text": "\n\n".join(parts).strip(), "meta": meta}
+
+
+def extract_xls(path, max_rows=20):
+    """旧版 .xls（BIFF）→ xlrd 读取，无需 LibreOffice。"""
+    try:
+        import xlrd
+    except ImportError:
+        return fail("MISSING_DEP", "缺少 xlrd", "py -m pip install xlrd（旧版 .xls 读取）")
+    book = xlrd.open_workbook(path)
+    parts, meta = [], {"format": "xls", "sheets": []}
+    for ws in book.sheets():
+        rows = []
+        for r in range(min(max_rows, ws.nrows)):
+            rows.append(" | ".join("" if ws.cell_value(r, c) in ("", None) else str(ws.cell_value(r, c)) for c in range(ws.ncols)))
+        meta["sheets"].append({"name": ws.name, "rows": ws.nrows, "cols": ws.ncols})
+        parts.append(f"=== {ws.name} ({ws.nrows}x{ws.ncols}) ===\n" + "\n".join(rows))
     return {"text": "\n\n".join(parts).strip(), "meta": meta}
 
 
@@ -377,17 +397,95 @@ def extract_heic(path, out_dir):
             "artifacts": [png], "note": "已转 PNG；下一步用 dsh-vision-skill 的 vision.js 识别该 PNG"}
 
 
+def extract_psd(path, out_dir):
+    """PSD → 合成图 PNG + 图层元数据。"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return fail("MISSING_DEP", "缺少 Pillow", "py -m pip install pillow")
+    img = Image.open(path)
+    meta = {"format": "psd", "size": list(img.size), "mode": img.mode,
+            "frames_or_layers": getattr(img, "n_frames", 1)}
+    png = os.path.join(out_dir, os.path.splitext(os.path.basename(path))[0] + ".png")
+    img.convert("RGB").save(png)
+    return {"text": "", "meta": meta, "artifacts": [png],
+            "note": "已导出合成图 PNG（PSD 为合成视图，未合并图层的独立内容不在此图内）；可用 vision.js 识别"}
+
+
+def extract_parquet(path, max_rows=10):
+    """parquet → schema + 首个 row group 前 N 行（不全量读入内存）。"""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return fail("MISSING_DEP", "缺少 pyarrow", "py -m pip install pyarrow（parquet 读取）")
+    pf = pq.ParquetFile(path)
+    schema = pf.schema_arrow
+    meta = {
+        "format": "parquet",
+        "rows": pf.metadata.num_rows,
+        "row_groups": pf.metadata.num_row_groups,
+        "columns": [{"name": f.name, "type": str(f.type)} for f in schema],
+    }
+    table = pf.read_row_group(0).slice(0, max_rows)
+    header = " | ".join(f.name for f in schema)
+    lines = [header, "-" * len(header)]
+    for row in table.to_pylist():
+        lines.append(" | ".join("" if row.get(f.name) is None else str(row.get(f.name)) for f in schema))
+    text = (f"=== parquet: {meta['rows']} 行 × {len(meta['columns'])} 列"
+            f"（{meta['row_groups']} 个 row group） ===\n" + "\n".join(lines))
+    return {"text": text, "meta": meta}
+
+
+def extract_msg(path):
+    """Outlook .msg（OLE 复合文档）→ 主题/收发件人/日期/附件名/正文。"""
+    try:
+        import extract_msg
+    except ImportError:
+        return fail("MISSING_DEP", "缺少 extract-msg", "py -m pip install extract-msg（Outlook .msg 读取）")
+    opener = getattr(extract_msg, "openMsg", None) or extract_msg.Message
+    msg = opener(path)
+    body = ""
+    try:
+        atts = []
+        for att in getattr(msg, "attachments", []) or []:
+            name = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or "(未命名)"
+            atts.append(name)
+        meta = {
+            "format": "msg",
+            "subject": getattr(msg, "subject", "") or "",
+            "sender": getattr(msg, "sender", "") or "",
+            "to": getattr(msg, "to", "") or "",
+            "cc": getattr(msg, "cc", "") or "",
+            "date": str(getattr(msg, "date", "") or ""),
+            "attachments": atts,
+        }
+        body = getattr(msg, "body", None) or ""
+        if not body:
+            html = getattr(msg, "htmlBody", None)
+            if isinstance(html, bytes):
+                body = strip_html(html.decode("utf-8", "ignore"))
+            elif isinstance(html, str):
+                body = strip_html(html)
+    finally:
+        try:
+            msg.close()
+        except Exception:
+            pass
+    return {"text": body.strip(), "meta": meta}
+
+
 DIRECT = {
-    "docx": extract_docx, "xlsx": extract_xlsx, "xlsm": extract_xlsx, "pptx": extract_pptx,
+    "docx": extract_docx, "xlsx": extract_xlsx, "xlsm": extract_xlsx, "xls": extract_xls, "pptx": extract_pptx,
     "pdf": extract_pdf, "rtf": extract_rtf, "html": extract_html, "htm": extract_html,
     "ipynb": extract_ipynb, "csv": extract_csv, "tsv": extract_csv,
     "txt": extract_text, "md": extract_text, "json": extract_text, "yaml": extract_text,
     "yml": extract_text, "xml": extract_text, "log": extract_text,
     "epub": extract_epub, "srt": extract_subtitle, "vtt": extract_subtitle,
     "eml": extract_eml, "svg": extract_svg, "sqlite": extract_sqlite, "db": extract_sqlite,
+    "msg": extract_msg, "parquet": extract_parquet,
 }
 
-CONVERT = {"doc": "docx", "xls": "xlsx", "ppt": "pptx", "pages": "docx", "key": "pptx", "numbers": "xlsx"}
+CONVERT = {"doc": "docx", "ppt": "pptx", "pages": "docx", "key": "pptx", "numbers": "xlsx"}
 
 
 def sniff_ext(path: str) -> str | None:
@@ -500,6 +598,13 @@ def main() -> int:
         except Exception as exc:
             result = fail("PARSE_ERROR", f"{ext} 转码失败: {type(exc).__name__}: {exc}",
                           "文件可能不是有效 HEIC（或已损坏）；可用系统「照片」另存为 PNG 后重试")
+    elif ext == "psd":
+        os.makedirs(out_dir, exist_ok=True)
+        try:
+            result = extract_psd(path, out_dir)
+        except Exception as exc:
+            result = fail("PARSE_ERROR", f"psd 解析失败: {type(exc).__name__}: {exc}",
+                          "PSD 可能损坏或用了 Pillow 不支持的压缩方式；可在 Photoshop 里另存为 PNG 后重试")
     elif ext in DIRECT:
         try:
             result = DIRECT[ext](path)
