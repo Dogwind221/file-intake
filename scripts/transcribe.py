@@ -33,10 +33,26 @@ import time
 
 
 def fail(code: str, message: str, hint: str | None = None) -> dict:
-    out = {"ok": False, "error": {"code": code, "message": message}}
+    out = {"ok": False, "handler": "transcribe.py", "artifacts": [], "summary": f"{code}: {message}",
+           "error": {"code": code, "message": message}}
     if hint:
         out["error"]["hint"] = hint
     return out
+
+
+def summarize(meta: dict, chars: int, note: str | None = None) -> str:
+    """一句话结论（统一交付契约的 summary 字段）。"""
+    if meta.get("format") == "midi":
+        return (f"MIDI {meta.get('duration_sec', '?')}s，{len(meta.get('tracks', []))} 条音轨"
+                "（只解析元数据，不做语音转写）")
+    dur = meta.get("duration_sec", "?")
+    if meta.get("chunked"):
+        base = f"音频 {dur}s，分 {meta.get('chunk_count', '?')} 段转写，共 {chars} 字"
+    else:
+        base = f"音频 {dur}s，转写 {chars} 字"
+    if note:
+        base += f"（{note}）"
+    return base
 
 
 # ── 缓存（与 extract.py 同一格式，可互相复用） ────────────────
@@ -80,6 +96,10 @@ def cache_get(key: str) -> dict | None:
             arts.insert(0, text_path)
     # 缓存里的产物路径来自当时的调用（--out 等），只保留仍存在的
     payload["artifacts"] = [p for p in payload.get("artifacts", []) if os.path.exists(p)]
+    # 老缓存补齐交付契约字段
+    payload.setdefault("handler", "transcribe.py")
+    if not payload.get("summary"):
+        payload["summary"] = summarize(payload.get("meta", {}), payload.get("chars", 0), payload.get("note"))
     payload["cached"] = True
     return payload
 
@@ -299,6 +319,8 @@ def main() -> int:
         result = fail("UNSUPPORTED_TYPE", f"transcribe.py 不支持 .{ext}", "先跑 node scripts/route.mjs <文件>")
 
     if not result.get("ok"):
+        result.setdefault("source", path)
+        result.setdefault("type", ext)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 1
 
@@ -306,12 +328,17 @@ def main() -> int:
         "ok": True,
         "source": path,
         "type": result.get("type", ext),
+        "handler": "transcribe.py",
         "chars": result.get("chars", 0),
         "cached": False,
         "meta": result.get("meta", {}),
         "artifacts": result.get("artifacts", []),
+        "summary": result.get("summary") or summarize(result.get("meta", {}), result.get("chars", 0),
+                                                      result.get("note")),
         "text": result.get("text", ""),
     }
+    if result.get("note"):
+        payload["note"] = result["note"]
     if out_path:
         out_abs = os.path.abspath(out_path)
         os.makedirs(os.path.dirname(out_abs), exist_ok=True)

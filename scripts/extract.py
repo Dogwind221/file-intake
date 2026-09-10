@@ -44,10 +44,44 @@ DEFAULT_MAX_CHARS = 20000
 
 
 def fail(code: str, message: str, hint: str | None = None) -> dict:
-    out = {"ok": False, "error": {"code": code, "message": message}}
+    out = {"ok": False, "handler": "extract.py", "artifacts": [], "summary": f"{code}: {message}",
+           "error": {"code": code, "message": message}}
     if hint:
         out["error"]["hint"] = hint
     return out
+
+
+def summarize(ext: str, text: str, meta: dict) -> str:
+    """一句话结论（统一交付契约的 summary 字段）。"""
+    n = len(text or "")
+    if ext in ("heic", "heif"):
+        size = meta.get("size") or []
+        return f"HEIC {size[0]}x{size[1]} 已转 PNG（产物见 artifacts），下一步交给识图" if size else "HEIC 已转 PNG"
+    if ext == "psd":
+        size = meta.get("size") or []
+        return f"PSD {size[0]}x{size[1]} 已导出合成图 PNG（{meta.get('frames_or_layers', 1)} 图层），下一步交给识图"
+    if ext == "parquet":
+        return f"parquet：{meta.get('rows', 0)} 行 × {len(meta.get('columns', []))} 列，已取首批行"
+    if ext in ("sqlite", "db"):
+        return f"SQLite：{len(meta.get('tables', []))} 张表，已给出行数/列名/样本"
+    if ext == "msg":
+        return f"Outlook 邮件「{meta.get('subject', '')}」，正文 {n} 字符，附件 {len(meta.get('attachments', []))} 个"
+    if ext == "eml":
+        return f"邮件「{meta.get('subject', '')}」，正文 {n} 字符，附件 {len(meta.get('attachments', []))} 个"
+    if ext == "pdf":
+        return f"PDF {meta.get('pages', '?')} 页，提取文本 {n} 字符"
+    if ext in ("xlsx", "xlsm", "xls"):
+        sheets = meta.get("sheets", [])
+        return f"表格 {len(sheets)} 个工作表，提取文本 {n} 字符"
+    if ext == "pptx":
+        return f"演示 {meta.get('slides', '?')} 页，提取文本 {n} 字符"
+    if ext == "epub":
+        return f"EPUB「{meta.get('title', '')}」{meta.get('chapters', '?')} 章，提取文本 {n} 字符"
+    if meta.get("format") == "subtitle":
+        return f"字幕 {meta.get('cues', '?')} 条，提取文本 {n} 字符"
+    if ext == "svg":
+        return f"SVG 文本节点 {meta.get('text_nodes', 0)} 个，提取文本 {n} 字符"
+    return f"{ext}：提取文本 {n} 字符"
 
 
 # ── 缓存 ──────────────────────────────────────────────────────
@@ -91,6 +125,11 @@ def cache_get(key: str) -> dict | None:
             arts.insert(0, text_path)
     # 缓存里的产物路径来自当时的调用（--out 等），只保留仍存在的
     payload["artifacts"] = [p for p in payload.get("artifacts", []) if os.path.exists(p)]
+    # 老缓存补齐交付契约字段
+    payload.setdefault("handler", "extract.py")
+    payload.setdefault("source", payload.get("source", ""))
+    if not payload.get("summary"):
+        payload["summary"] = summarize(payload.get("type", ""), payload.get("text", ""), payload.get("meta", {}))
     payload["cached"] = True
     return payload
 
@@ -626,6 +665,8 @@ def main() -> int:
         result = fail("UNSUPPORTED_TYPE", f"extract.py 不支持 .{ext}", "先跑 node scripts/route.mjs <文件> 看路由结论")
 
     if not result.get("ok", True):
+        result.setdefault("source", path)
+        result.setdefault("type", ext)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 1
 
@@ -640,11 +681,13 @@ def main() -> int:
         "ok": True,
         "source": path,
         "type": ext,
+        "handler": "extract.py",
+        "artifacts": result.get("artifacts", []),
+        "summary": summarize(ext, full_text, result.get("meta", {})),
         "chars": len(full_text),
         "truncated": truncated,
         "cached": False,
         "meta": result.get("meta", {}),
-        "artifacts": result.get("artifacts", []),
         "text": text,
     }
     if guessed:
@@ -669,6 +712,9 @@ def main() -> int:
             fh.write(full_text)
         payload["artifacts"] = payload["artifacts"] + [out_abs]
         payload["text"] = text[:2000]
+
+    if chunk_chars > 0 and payload.get("chunks"):
+        payload["summary"] += f"；已切 {len(payload['chunks'])} 块便于逐块处理"
 
     cache_put(key, {**payload, "text": full_text, "chunks": payload.get("chunks", [])})
     print(json.dumps(payload, ensure_ascii=False, indent=2))

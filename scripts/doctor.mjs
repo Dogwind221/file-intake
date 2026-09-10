@@ -90,7 +90,7 @@ add('pyarrow', 'python', false, probePyModule('pyarrow'), 'py -m pip install pya
 add('extract-msg', 'python', false, probePyModule('extract_msg'), 'py -m pip install extract-msg（Outlook .msg 读取）')
 
 // ── 同目录脚本 ──
-for (const f of ['route.mjs', 'sniff.py', 'extract.py', 'transcribe.py', 'unzip.py', 'batch.mjs']) {
+for (const f of ['route.mjs', 'sniff.py', 'extract.py', 'transcribe.py', 'unzip.py', 'batch.mjs', 'selftest.mjs']) {
   const p = new URL(`./${f}`, import.meta.url)
   const ok = existsSync(p)
   checks.push({ name: f, kind: 'script', required: true, ok, detail: ok ? '存在' : '缺失', ...(ok ? {} : { hint: '仓库文件不完整，请重新拉取' }) })

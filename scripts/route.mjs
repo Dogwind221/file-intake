@@ -240,7 +240,10 @@ function route(input, opts = {}) {
   }
 
   const file = path.resolve(input)
-  if (!fs.existsSync(file)) return finish({ ok: false, input, error: { code: 'NOT_FOUND', message: `文件不存在: ${file}` } })
+  if (!fs.existsSync(file)) {
+    const ext = (path.extname(file).slice(1) || '').toLowerCase()
+    return finish({ ok: false, input: file, ext, error: { code: 'NOT_FOUND', message: `文件不存在: ${file}` } })
+  }
   const stat = fs.statSync(file)
   if (stat.isDirectory()) {
     return finish({
@@ -420,19 +423,36 @@ function route(input, opts = {}) {
 }
 
 function finish(payload) {
-  return {
+  const out = {
     ok: payload.ok !== false,
+    source: payload.input,
     input: payload.input,
     kind: payload.kind ?? 'unknown',
+    type: payload.ext || (payload.kind ?? 'unknown'),
     ext: payload.ext ?? '',
     sniffed: payload.sniffed ?? null,
     handler: payload.handler ?? null,
     skill: payload.skill ?? null,
     command: payload.command ?? null,
+    artifacts: [],   // 路由阶段不产生产物；执行脚本才填
+    summary: payload.summary ?? '',
     notes: payload.notes ?? [],
     hints: payload.hints ?? [],
     ...(payload.error ? { error: payload.error } : {}),
   }
+  if (!out.summary) out.summary = describe(out)
+  return out
+}
+
+/** 一句话结论（下游/人读都用它）。 */
+function describe(r) {
+  if (r.error) return `无法路由：${r.error.code} ${r.error.message}`
+  const base = `${r.kind}${r.ext ? '（.' + r.ext + '）' : ''} → ${r.handler ?? '未知'}`
+  if (r.handler === 'refuse') return `拒绝路由：${r.ext || r.kind} 属可执行/脚本类（安全边界）`
+  if (r.handler === 'needs-tool') return `${base}，但缺依赖：${r.hints[0] ?? '需先安装工具'}`
+  if (r.kind === 'directory') return `目录 → batch.mjs 批量处理`
+  if (r.kind === 'text') return `纯文本，直接用 read 工具读取`
+  return base
 }
 
 /* ================= CLI ================= */

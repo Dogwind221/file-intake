@@ -35,7 +35,8 @@ MAX_MB = 512
 
 
 def fail(code: str, message: str, hint: str | None = None) -> dict:
-    out = {"ok": False, "error": {"code": code, "message": message}}
+    out = {"ok": False, "handler": "unzip.py", "artifacts": [], "summary": f"{code}: {message}",
+           "error": {"code": code, "message": message}}
     if hint:
         out["error"]["hint"] = hint
     return out
@@ -269,8 +270,14 @@ def main() -> int:
         return 1
     result.update({
         "source": path,
+        "type": ext or "archive",
+        "handler": "unzip.py",
         "out_dir": out_dir,
-        "note": "对 files 中每个文件重新执行 node scripts/route.mjs <file>，或直接用 node scripts/batch.mjs <压缩包> 自动递归",
+        "artifacts": result.get("files", []),
+        "summary": (f"{result.get('engine')} 解压 {result.get('entries')} 个条目"
+                    f"（{result.get('bytes', 0) / 1048576:.1f} MB）→ {out_dir}"
+                    + (f"，跳过 {len(result.get('skipped', []))} 个危险条目" if result.get("skipped") else "")),
+        "note": "对 artifacts 中每个文件重新执行 node scripts/route.mjs <file>，或直接用 node scripts/batch.mjs <压缩包> 自动递归",
     })
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

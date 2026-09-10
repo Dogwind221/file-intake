@@ -71,7 +71,7 @@ function route(file) {
   }
 }
 
-/** 执行处理器，返回 { ok, artifacts, error, engine }。 */
+/** 执行处理器，返回 { ok, artifacts, error, engine, summary }。 */
 function execute(handler, file) {
   const out = path.join(outDir, path.basename(file) + '.txt')
   let cmd, args
@@ -96,6 +96,7 @@ function execute(handler, file) {
       engine: payload.engine,
       cached: payload.cached === true,
       chars: payload.chars,
+      summary: payload.summary,
       error: payload.error,
     }
   } catch {
@@ -119,7 +120,7 @@ function main() {
     const r = route(target)
     if (r.kind === 'archive') {
       const un = execute('unzip.py', target)
-      preExtracted.push({ archive: target, ok: un.ok, out_dir: path.join(outDir, path.basename(target, path.extname(target)) + '_unzip'), error: un.error })
+      preExtracted.push({ archive: target, ok: un.ok, summary: un.summary, out_dir: path.join(outDir, path.basename(target, path.extname(target)) + '_unzip'), error: un.error })
       if (un.ok) for (const f of un.artifacts) queue.push({ file: f })
       continue
     }
@@ -135,13 +136,14 @@ function main() {
   if (truncated) files = files.slice(0, maxFiles)
 
   // 2) 逐个路由 + 执行
-  const results = queue.filter((q) => q.missing).map((q) => ({ file: q.file, status: 'missing' }))
+  const results = queue.filter((q) => q.missing).map((q) => ({ file: q.file, status: 'missing', summary: '文件不存在' }))
   for (const file of files) {
     const r = route(file)
-    const entry = { file, kind: r.kind, handler: r.handler, status: 'routed' }
+    const entry = { file, type: r.type, kind: r.kind, handler: r.handler, status: 'routed', artifacts: [], summary: r.summary }
     if (r.ok === false) {
       entry.status = 'unsupported'
       entry.reason = r.error?.code ?? r.hints?.[0] ?? '不支持'
+      entry.summary = `不支持：${entry.reason}`
       results.push(entry)
       continue
     }
@@ -151,23 +153,36 @@ function main() {
       entry.status = out.ok ? (out.cached ? 'ok(cached)' : 'ok') : out.skipped ? 'needs-agent' : 'failed'
       entry.artifacts = out.artifacts ?? []
       entry.chars = out.chars
-      if (out.error) entry.error = out.error
+      if (out.summary) entry.summary = out.summary
+      if (out.error) {
+        entry.error = out.error
+        entry.summary = `失败：${out.error.code ?? ''} ${out.error.message ?? ''}`.trim()
+      }
     } else {
       entry.status = 'needs-agent'
       entry.command = r.command
+      entry.summary = `需 agent 决策（${r.handler}）：${r.command ?? '见 route.mjs 输出'}`
     }
     results.push(entry)
   }
 
+  const counts = results.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc }, {})
   const summary = {
     ok: results.every((r) => ['ok', 'ok(cached)', 'routed', 'needs-agent'].includes(r.status)),
+    handler: 'batch.mjs',
+    source: inputs.map((i) => path.resolve(i)),
+    type: 'batch',
     dryRun,
     outDir,
     inputs: inputs.length,
     files: files.length,
     truncated,
     archives: preExtracted,
-    counts: results.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc }, {}),
+    counts,
+    artifacts: results.flatMap((r) => r.artifacts ?? []),
+    summary: `批处理 ${files.length} 个文件：` +
+      Object.entries(counts).map(([k, v]) => `${k} ${v}`).join('，') +
+      `（产物目录 ${outDir}）`,
     results,
   }
   console.log(JSON.stringify(summary, null, 2))
