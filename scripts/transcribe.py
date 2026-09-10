@@ -75,7 +75,11 @@ def cache_get(key: str) -> dict | None:
     if os.path.isfile(text_path):
         with open(text_path, encoding="utf-8") as fh:
             payload["text"] = fh.read()
-        payload.setdefault("artifacts", []).insert(0, text_path)
+        arts = payload.setdefault("artifacts", [])
+        if text_path not in arts:
+            arts.insert(0, text_path)
+    # 缓存里的产物路径来自当时的调用（--out 等），只保留仍存在的
+    payload["artifacts"] = [p for p in payload.get("artifacts", []) if os.path.exists(p)]
     payload["cached"] = True
     return payload
 
@@ -86,7 +90,9 @@ def cache_put(key: str, payload: dict) -> None:
     with open(text_path, "w", encoding="utf-8") as fh:
         fh.write(payload.get("text", ""))
     stored = {k: v for k, v in payload.items() if k != "text"}
-    stored.setdefault("artifacts", []).insert(0, text_path)
+    arts = stored.setdefault("artifacts", [])
+    if text_path not in arts:
+        arts.insert(0, text_path)
     with open(meta_path, "w", encoding="utf-8") as fh:
         json.dump(stored, fh, ensure_ascii=False, indent=2)
 
@@ -275,7 +281,9 @@ def main() -> int:
         return 1
 
     ext = os.path.splitext(path)[1].lower().lstrip(".")
-    key = cache_key(file_sha256(path), f"transcribe:{ext}", {"model": model, "lang": lang, "chunk_minutes": chunk_minutes})
+    key = cache_key(file_sha256(path), f"transcribe:{ext}",
+                    {"model": model, "lang": lang, "chunk_minutes": chunk_minutes,
+                     "name": os.path.basename(path), "out": os.path.basename(out_path) if out_path else None})
     if not no_cache and not refresh:
         hit = cache_get(key)
         if hit:
