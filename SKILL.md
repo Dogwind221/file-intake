@@ -69,15 +69,16 @@ node scripts/doctor.mjs        # 必需项缺失会给出安装命令
 
 - 用户消息带**文件附件**：
   - **非图片文件**（PDF/Word/Excel/音频/视频/压缩包…）→ DSH 0.1.3+ **原生支持**：模型直接拿到 `[File "name" (N bytes, sha256:…): verbatim read-only copy saved at "<路径>"…]`，**那个路径就是最终路径，直接用**——**不要**去调 `resolve_attachment.mjs`，也不要再解析什么 id（多跑一步纯属浪费）
-  - **图片** → image block（`attachmentId` 形如 `sha256:<hex>`，**没有现成路径**）→ 这一步才是 `..\dsh-vision-skill\scripts\resolve_attachment.mjs` 的唯一用途：图片专用分支，把 `attachmentId` 解析成磁盘路径（多模态模型也可以直接用 harness 的 `read_image` 吃该 id）
+  - **图片** → 优先看消息里有没有现成路径：DSH 0.1.5+ 会给 `Normalized copy (read-only; may be resized or re-encoded): <路径> (W×H, image/png)` → **直接用**（多模态会话也可直接 `read_image <路径>`）。**只有拿不到路径**（消息里只有 `attachmentId` / image block）时才需要 `..\dsh-vision-skill\scripts\resolve_attachment.mjs`，或按附件库规则自己拼 `%USERPROFILE%\.dsh\attachments\v1\objects\<hex前2位>\<hex>`
+  - **本技能在图片上的独有价值**：HEIC/HEIF 转 PNG、PSD 导出合成图、BMP/TIFF/AVIF 等原生 `read_image` 不吃的格式转码（`extract.py`），以及**纯文本模型**下的整条识图链——多模态会话"看图"这件事本身已被原生 `read_image` 取代
 - 用户给出任意**本地路径 / URL**（文档、表格、音频、视频、压缩包…）
 - 用户要求「读取/分析/拆解/处理这个文件」
 
-> 判断顺序：**先看消息里有没有现成路径**（非图片附件一定有）→ 有就直接路由；**只有图片附件**才走 `resolve_attachment.mjs`。
+> 判断顺序：**先看消息里有没有现成路径**（非图片附件一定有；图片在 0.1.5+ 多数也有）→ 有就直接路由/直接 `read_image`；**都没有**才走 `resolve_attachment.mjs`。
 
 ## 工作流
 
-1. **取路径**：非图片附件 → 用消息里的只读副本路径（**不调 resolve_attachment.mjs**）；图片附件 → `resolve_attachment.mjs`（图片专用分支）；本地路径/URL → 直接用。
+1. **取路径**：非图片附件 → 消息里的 `verbatim read-only copy` 路径（**不调 resolve_attachment.mjs**）；图片附件 → 优先用消息里的 `Normalized copy` 路径（没有才 `resolve_attachment.mjs` / 拼对象路径）；本地路径/URL → 直接用。
 2. **路由**：`node scripts/route.mjs "<路径>"`（目录会直接给出 `batch.mjs` 命令）。
 3. **执行**：跑 `command`（`extract.py` 提取文本 / `transcribe.py` 转写 / `unzip.py` 解压 / `vision.js` 识图 / video-deconstruct 拆解）。
 4. **递归/批量**：压缩包解压后对每个产物重新路由；文件多就直接上 `node scripts/batch.mjs <目录>`（自动递归 + 汇总）。

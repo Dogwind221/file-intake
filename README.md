@@ -29,8 +29,15 @@ node scripts/selftest.mjs                   # 自测：自动造样例跑通全�
 node scripts/doctor.mjs                     # 依赖自检
 ```
 
-**DSH 0.1.3 起非图片附件原生支持**：模型直接收到只读副本路径，**直接用那个路径**即可；
-`resolve_attachment.mjs` 只服务于**图片附件**（只有 `attachmentId`、没有现成路径）——非图片不要多跑这一步。
+**附件路径的取法（DSH 0.1.3+ 原生，别再手动解析）**：
+
+| 附件类型 | 消息里会有什么 | 怎么做 |
+|---|---|---|
+| 非图片（PDF/Word/音频/视频/压缩包…） | `[File "name" (N bytes…): verbatim read-only copy saved at "<路径>"]` | **直接用这个路径** |
+| 图片 | `Normalized copy (read-only; may be resized or re-encoded): <路径> (W×H, image/png)`（0.1.5+） | **直接用**，多模态会话可直接 `read_image` |
+| 图片（拿不到路径时） | 只有 `attachmentId` / image block | 才用 `..\dsh-vision-skill\scripts\resolve_attachment.mjs`，或按附件库规则拼 `%USERPROFILE%\.dsh\attachments\v1\objects\<hex前2位>\<hex>` |
+
+**图片上本技能的独有价值**：HEIC/HEIF 转 PNG、PSD 导出合成图、BMP/TIFF/AVIF 等 `read_image` 不吃的格式转码，以及纯文本模型下的整条识图链——多模态会话"看图"本身已被原生 `read_image` 取代。
 
 所有脚本输出统一的交付契约，下游 skill 直接消费：
 
